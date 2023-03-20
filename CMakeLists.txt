@@ -8,6 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(slothmodel VERSION 1.0.0 DESCRIPTION "Simple Logical Tautology Handler (SLoTH) Model Shared Library")
 
+# https://www.intel.com/content/www/us/en/develop/documentation/oneapi-dpcpp-cpp-compiler-dev-guide-and-reference/top/compiler-setup/use-the-command-line/use-cmake-with-the-compiler.html
+# Incidentally... MUST COME AFTER `project(...)`!
+if (INTEL_DPCPP)
+    #cmake_minimum_required(VERSION 3.20)
+    find_package(IntelDPCPP REQUIRED)
+endif()
+
 if(WIN32)
     add_library(slothmodel src/sloth.cpp)
 else()
