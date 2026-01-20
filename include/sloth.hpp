@@ -23,7 +23,7 @@ class Sloth : public bmi::Bmi {
         *
         * @return Pointer to the newly created @ref test_bmi_c_model struct instance in memory.
         */
-        Sloth(){};
+        Sloth() = default;
 
         void Initialize(std::string config_file) override;
         void Update() override;
@@ -113,20 +113,34 @@ class Sloth : public bmi::Bmi {
 
         std::vector<std::string> ResolveInNameAliases(std::string name); // only used for Setting
 
+
         /**
-         * @brief Parses any metadata appended to a variable name used in a `Set*` operation and updates the model's state accordingly.
-         * 
-         * Uses the following default metadata values if a name is encountered for the first time and any are not specified:
-         * 
-         * * type = `double`
-         * * units = `1` (dimensionless unit value)
-         * * location = "node"
-         * 
-         * If metadata is found on a variable that has been defined as an input variable, this method will throw.
-         * 
-         * @param nameMaybeWithMeta A variable name passed to some `Set...` operation which may or may not have metadata about the variable encoded in parentheses.
-         * @return std::string The "raw" name with the metadata information (if any) removed.
+         * Identifies the raw name within the passed string and maps all identified metadata to var_units, var_counts,
+         * var_types, and var_locations
+         * Supported patterns:
+         *  - "name"
+         *  - "name()"
+         *  - "name(,,)"
+         *  - "name(,,,,)"
+         *  - "name(5,,,,)"
+         *  - "name(5)"
+         *  - "name(5,int,,,)"
+         *  - "name(5,int)"
+         *  - "name(5,int,m,,)"
+         *  - "name(5,int,m)"
+         *  - "name(5,int,m,leaf,)"
+         *  - "name(5,int,m,leaf)"
+         *  - "name(5,int,m,leaf,alias)"
+         *  - "name(,int,m,leaf,alias)"
+         *  - "name(,,m,leaf,alias)"
+         *  - "name(,int,,leaf,alias)"
+         *  - "name(,,,leaf,alias)"
+         *  - "name(,,,leaf)"
+         *  - etc
+         * @param nameMaybeWithMeta The string that contains the name and possibly metadata
+         * @return The identified name within the string
          */
+        // TODO: Consider making `nameMaybeWithMeta` a constant reference to avoid unnecessary copies
         std::string ProcessNameMeta(std::string nameMaybeWithMeta);
         void EnsureAllocatedForByValue(std::string name);
 

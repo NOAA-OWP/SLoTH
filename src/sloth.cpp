@@ -160,12 +160,45 @@ std::string Sloth::GetVarType(std::string name){ //v
   throw std::runtime_error("GetVarType called for non-existent variable: "+name+" " SOURCE_LOC );
 }
 
+/**
+ * Determine the appropriate UDUNIT value from a given measurement unit name
+ * @param proposed_unit A string representing a unit of measurement
+ * @return The proper UDUnit dimensionless measurement if the unit was marked as dimensionless, otherwise the proposed unit
+ */
+static std::string determine_udunit(const std::string& proposed_unit) {
+    std::string lowercase_unit(proposed_unit);
+
+    std::transform(
+        lowercase_unit.begin(),
+        lowercase_unit.end(),
+        lowercase_unit.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        }
+    );
+
+    if (
+        lowercase_unit.empty() ||
+        lowercase_unit == "none" ||
+        lowercase_unit == "na" ||
+        lowercase_unit == "n/a" ||
+        lowercase_unit == "-" ||
+        lowercase_unit == "null" ||
+        lowercase_unit == "unitless"
+    ) {
+        return "1";
+    }
+
+    return proposed_unit;
+}
+
 std::string Sloth::GetVarUnits(std::string name){ //v
   name = this->ResolveInNameAlias(name);
 
   auto iter = this->var_units.find(name);
   if(iter != this->var_units.end()){
-    return iter->second;
+    const std::string& unit = iter->second;
+    return determine_udunit(unit);
   }
   throw std::runtime_error("GetVarUnits called for non-existent variable: "+name+" " SOURCE_LOC );
 }
@@ -303,118 +336,225 @@ int Sloth::ComputeVarNbytes(std::string name){ //v
   return item_size * item_count;
 }
 
-std::string Sloth::ProcessNameMeta(std::string name){ //v
-  // Early-out: if the name passed is already known, it can be assumed that it has no metadata--return it.
-  if(this->var_counts.count(name) > 0){
-    return name;
-  }
-  // Early-out: if the name passed in is an input alias, will not process metadata, return it.
-  if(!this->ResolveInNameAliases(name).empty()){
-    return name;
-  }
+/**
+ * Return a copy of the given string that is missing all leading and trailing whitespace
+ *
+ * @param input The input string to trim
+ * @return A copy of the input string missing all leading and following whitespace
+ */
+static std::string trim_whitespace(const std::string& input) {
+    size_t first_non_whitespace_index = 0;
 
-  // parse name string for metadata
-  int count = 1;
-  std::string type = "double";
-  std::string units = "1";
-  std::string location = "node";
-  std::string inname = "";
-
-  // parse name string for metadata
-  std::string raw_name, tempstr;
-  size_t lpos, rpos, temppos, rppos;
-  if((lpos = name.find("(")) != std::string::npos){
-
-    if((rpos = name.find(")")) == std::string::npos){
-      throw std::runtime_error("Missing closing paren in variable definition '" + name + "' " + SOURCE_LOC);
-    }
-    rppos = rpos;
-    raw_name = name.substr(0,lpos);
-
-    // find a comma, otherwise rpos remains the right paren location
-    if((temppos = name.find(",",lpos+1)) != std::string::npos){
-      rpos = temppos;
-    }
-    tempstr = name.substr(lpos+1,rpos-lpos-1);
-    //TODO: support whitespace trimming https://www.techiedelight.com/trim-string-cpp-remove-leading-trailing-spaces/
-    if(tempstr.length()>0){
-      count = std::stoi(tempstr);
-    }
-    lpos = rpos;
-    rpos = rppos;
-
-    if((temppos = name.find(",",lpos+1)) != std::string::npos){
-      rpos = temppos;
-    }
-    tempstr = name.substr(lpos+1,rpos-lpos-1);
-    if(tempstr.length()>0){
-      type = tempstr;
-      if(type_sizes.count(type) <= 0){
-        throw std::runtime_error("Illegal type '" + type + "' specified for variable '" + raw_name + "' " SOURCE_LOC);
-      }
-    }
-    lpos = rpos;
-    rpos = rppos;
-
-    if((temppos = name.find(",",lpos+1)) != std::string::npos){
-      rpos = temppos;
-    }
-    tempstr = name.substr(lpos+1,rpos-lpos-1);
-    if(tempstr.length()>0){
-      units = tempstr;
-    }
-    lpos = rpos;
-    rpos = rppos;
-
-    if((temppos = name.find(",",lpos+1)) != std::string::npos){
-      rpos = temppos;
-    }
-    tempstr = name.substr(lpos+1,rpos-lpos-1);
-    if(tempstr.length()>0){
-      location = tempstr;
-    }
-    lpos = rpos;
-    rpos = rppos;
-
-    if((temppos = name.find(",",lpos+1)) != std::string::npos){
-      rpos = temppos;
-    }
-    tempstr = name.substr(lpos+1,rpos-lpos-1);
-    if(tempstr.length()>0){
-      inname = tempstr;
+    while (first_non_whitespace_index < input.size() && std::isspace(static_cast<unsigned char>(input[first_non_whitespace_index]))) {
+        ++first_non_whitespace_index;
     }
 
-    // Validate non-collision for inname
-    if(inname == raw_name){
-      throw std::runtime_error("Aliasing an input variable (\"" + inname + "\") to its own name is not allowed!");
-    }
-    if(this->var_values.count(inname) > 0){
-      throw std::runtime_error("Attempt to set input alias \"" + inname + "\" for variable \"" + raw_name + "\" conflicts with existing output variable of the same name, which is not allowed!");
+    if (first_non_whitespace_index == input.size()) {
+        return {};
     }
 
-  } else {
-    raw_name = name;
-  }
+    size_t last_non_whitespace_index = input.size() - 1;
 
-  // If this is a new name, make sure it does not collide with a previously defined input alias
-  // (Checking first if it is new is an optimization)
-  if(this->var_counts.count(raw_name) <= 0){
-    if(!this->ResolveInNameAliases(raw_name).empty()){
-      throw std::runtime_error("Attempt to define a new variable \"" + raw_name + "\" which conflicts with a previously defined input alias of the same name, which is not allowed!");
+    while (last_non_whitespace_index > first_non_whitespace_index && std::isspace(static_cast<unsigned char>(input[last_non_whitespace_index]))) {
+        --last_non_whitespace_index;
     }
-  }
 
-  var_units[raw_name] = units;
-  var_counts[raw_name] = count;
-  var_types[raw_name] = type;
-  var_locations[raw_name] = location;
-  if(inname != ""){
-	  var_innames[raw_name] = inname;
-  }
-  //std::cerr<<"ProcessNameMeta processed "<<raw_name<<"("<<var_counts[raw_name]<<","<<type<<","<<units<<","<<location<<","<<inname<<")"<<std::endl;
-  this->EnsureAllocatedForByValue(raw_name);
+    return input.substr(
+        first_non_whitespace_index,
+        last_non_whitespace_index - first_non_whitespace_index + 1
+    );
+}
 
-  return raw_name;
+/**
+ * Retrieve the next metadata token embedded within a string of comma delimited values followed by a close parenthesis
+ *
+ * Say the value for `trimmed_name` is "name(value1,, value3, ,value5)"
+ *
+ * If:
+ *  1. `cursor_position` is `4`, this will return "value1" and move `cursor_position` to `11`
+ *  2. `cursor_position` is `11`, this will return "" and move `cursor_position` to `12`
+ *  3. `cursor_position` is `12`, this will return "value3" and move `cursor_position` to `20`
+ *  4. `cursor_position` is `20`, this will return "" and move `cursor_position` to `22`
+ *  5. `cursor_position` is `22`, this will return "value5" and move `cursor_position` to `29`
+ * @param trimmed_name An original input name whose leading and trailing whitespace has been trimmed
+ * @param position_of_closing_parenthesis The position within the string containing the closing parenthesis
+ * @param cursor_position The current position of the cursor that is iterating through the trimmed name
+ * @return A token if one was identified
+ */
+static std::string next_metadata_token(
+    const std::string& trimmed_name,
+    const size_t position_of_closing_parenthesis,
+    size_t& cursor_position
+) {
+    size_t position_after_token = position_of_closing_parenthesis;
+    const size_t comma_position = trimmed_name.find(',', cursor_position + 1);
+    const bool comma_found = comma_position != std::string::npos;
+    const bool comma_before_closing_parenthesis = comma_found && comma_position < position_of_closing_parenthesis;
+    if (comma_before_closing_parenthesis) {
+        position_after_token = comma_position;
+    }
+
+    std::string token = trimmed_name.substr(
+        cursor_position + 1,
+        position_after_token - cursor_position - 1
+    );
+    token = trim_whitespace(token);
+    cursor_position = position_after_token;
+    return token;
+}
+
+std::string Sloth::ProcessNameMeta(std::string nameMaybeWithMeta){ //v
+    std::string trimmed_name = trim_whitespace(nameMaybeWithMeta);
+
+    // Early-out: if the name passed is already known, it can be assumed that it has no metadata--return it.
+    if(this->var_counts.count(trimmed_name) > 0){
+        return trimmed_name;
+    }
+    // Early-out: if the name passed in is an input alias, will not process metadata, return it.
+    if(!this->ResolveInNameAliases(trimmed_name).empty()){
+        return trimmed_name;
+    }
+
+    // parse clean_name string for metadata
+    int count = 1;
+    std::string type = "double";
+    std::string units = "1";
+    std::string location = "node";
+    std::string input_name;
+
+    // parse clean_name string for metadata
+    std::string raw_name;
+
+    /* Represents the index of the first character in a token being investigated */
+    size_t cursor_position = trimmed_name.find('(');
+    const bool parenthesis_found = cursor_position != std::string::npos;
+
+    if(parenthesis_found) {
+        /* The index of the last character in a token being investigated */
+        const size_t position_of_close_parenthesis = trimmed_name.find(')', cursor_position + 1);
+        const bool missing_closing_parenthesis = position_of_close_parenthesis == std::string::npos;
+
+        if(missing_closing_parenthesis){
+            throw std::runtime_error(
+                "Missing closing paren in variable definition '" + trimmed_name + "' " + SOURCE_LOC
+            );
+        }
+
+        // Get the raw clean_name being processed - it will be the text up to the identified opening parenthesis
+        raw_name = trimmed_name.substr(0, cursor_position);
+        raw_name = trim_whitespace(raw_name);
+
+        const std::string count_representation = next_metadata_token(
+            trimmed_name,
+            position_of_close_parenthesis,
+            cursor_position
+        );
+        const bool has_count = !count_representation.empty();
+
+        // Look for the first value - if content was found between the cursor position and the end token, we've found
+        // what must be a count
+        if(has_count) {
+            try {
+                count = std::stoi(count_representation);
+            } catch (const std::exception&) {
+                throw std::runtime_error(
+                    std::string("Sloth::ProcessNameMeta - The identified value for the count ('") +
+                    count_representation + "') within '" + nameMaybeWithMeta + "' is invalid. It must be an integer." +
+                    SOURCE_LOC
+                );
+            }
+        }
+
+        const std::string variable_type = next_metadata_token(
+            trimmed_name,
+            position_of_close_parenthesis,
+            cursor_position
+        );
+        const bool has_variable_type = !variable_type.empty();
+
+        if(has_variable_type) {
+            type = variable_type;
+            if(type_sizes.count(type) <= 0){
+                throw std::runtime_error("Illegal type '" + type + "' specified for '" + nameMaybeWithMeta + "' " SOURCE_LOC);
+            }
+        }
+
+        const std::string units_token = next_metadata_token(
+            trimmed_name,
+            position_of_close_parenthesis,
+            cursor_position
+        );
+        const bool has_units_token = !units_token.empty();
+
+        if(has_units_token){
+            units = units_token;
+            units = determine_udunit(units);
+        }
+
+        const std::string location_token = next_metadata_token(
+            trimmed_name,
+            position_of_close_parenthesis,
+            cursor_position
+        );
+        const bool has_location_token = !location_token.empty();
+
+        if(has_location_token){
+            location = location_token;
+        }
+
+        const std::string input_name_token = next_metadata_token(
+            trimmed_name,
+            position_of_close_parenthesis,
+            cursor_position
+        );
+        const bool has_input_name_token = !input_name_token.empty();
+
+        if(has_input_name_token) {
+            input_name = input_name_token;
+        }
+
+        if (!input_name.empty()) {
+            // Validate non-collision for input_name
+            if(input_name == raw_name){
+                throw std::runtime_error(
+                    "Aliasing an input variable (\"" + input_name + "\") to its own name is not allowed!"
+                );
+            }
+
+            if(this->var_values.count(input_name) > 0) {
+                throw std::runtime_error(
+                    "Attempt to set input alias \"" + input_name +
+                    "\" for variable \"" + raw_name +
+                    "\" conflicts with existing output variable of the same name, which is not allowed!"
+                );
+            }
+        }
+    } else {
+        raw_name = trimmed_name;
+    }
+
+    // If this is a new name, make sure it does not collide with a previously defined input alias
+    // (Checking first if it is new is an optimization)
+    if(this->var_counts.count(raw_name) <= 0 && !this->ResolveInNameAliases(raw_name).empty()){
+        throw std::runtime_error(
+            "Attempt to define a new variable \"" +
+            raw_name +
+            "\" which conflicts with a previously defined input alias of the same name, which is not allowed!"
+        );
+    }
+
+    var_units[raw_name] = units;
+    var_counts[raw_name] = count;
+    var_types[raw_name] = type;
+    var_locations[raw_name] = location;
+
+    if(!input_name.empty()){
+        var_innames[raw_name] = input_name;
+    }
+
+    this->EnsureAllocatedForByValue(raw_name);
+
+    return raw_name;
 }
 
 std::string Sloth::ResolveInNameAlias(std::string name){
